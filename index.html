@@ -15,19 +15,361 @@
       import * as THREE from "https://unpkg.com/three@0.122.0/build/three.module.js";
       import * as CANNON from "./dist/cannon-es.js";
       import { Demo } from "./js/Demo.js";
-      import { bodyToMesh } from './js/three-conversion-utils.js'
+      import { bodyToMesh } from "./js/three-conversion-utils.js";
 
       const demo = new Demo();
-      function Vector3_Vec3(t){
-        let res=new THREE.Vector3(t.x,t.y,t.z)
-        return res
+     
+      function setupWorld(demo) {
+        const world = demo.getWorld();
+        world.gravity.set(0, -30, 0);
 
+        // Sweep and prune broadphase
+        world.broadphase = new CANNON.SAPBroadphase(world);
+
+        // Adjust the global friction
+        world.defaultContactMaterial.friction = 0.2;
+
+        return world;
       }
-      function Vec3_Vector3(t){
-        console.log(t)
-        let re=new CANNON.Vec3(t.x,t.y,t.z)
-        console.log(re)
-        return re
+
+      let mouse = true;
+      function clamp(x, a, b) {
+        return Math.min(Math.max(x, a), b);
+      }
+
+      class ThirdPersonCamera {
+        constructor(params) {
+          this._params = params;
+          this._camera = params.camera;
+
+          this._currentPosition = new THREE.Vector3();
+          this._currentLookat = new THREE.Vector3();
+        }
+        _CalculateIdealOffset() {
+          const idealOffset = new THREE.Vector3(0, 40, -60);
+          let bp = body.position;
+          let bq = body.quaternion;
+          idealOffset.applyQuaternion(
+            new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w)
+          );
+
+          idealOffset.add(Vector3_Vec3(body.position));
+
+          return idealOffset;
+        }
+
+        _CalculateIdealLookat() {
+          const idealLookat = new THREE.Vector3(0, 10, 50);
+          let bp = body.position;
+          let bq = body.quaternion;
+          idealLookat.applyQuaternion(
+            new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w)
+          );
+          idealLookat.add(Vector3_Vec3(body.position));
+          return idealLookat;
+        }
+
+        Update(timeElapsed) {
+          const idealOffset = this._CalculateIdealOffset();
+          const idealLookat = this._CalculateIdealLookat();
+
+          // const t = 0.05;
+          // const t = 4.0 * timeElapsed;
+          const t = 1.0 - Math.pow(0.001, timeElapsed);
+
+          this._currentPosition.lerp(idealOffset, t);
+          this._currentLookat.lerp(idealLookat, t);
+
+          this._camera.position.copy(this._currentPosition);
+          this._camera.lookAt(this._currentLookat);
+        }
+      }
+
+      class BasicCharacterController {
+        constructor(params) {
+          this._Init(params);
+        }
+
+        _Init(params) {
+          this._params = params;
+          this.phi_ = 0;
+          this.phiSpeed_ = 8;
+          this.theta_ = 0;
+          this.thetaSpeed_ = 5;
+          this._decceleration = new THREE.Vector3(-0.0005, -0.0001, -5.0);
+          this._acceleration = new THREE.Vector3(1, 0.25, 50.0);
+          this._velocity = new THREE.Vector3(0, 0, 0);
+          this.qq = new THREE.Quaternion();
+          this._animations = {};
+          this._input = new BasicCharacterControllerInput();
+          //this._LoadModels();
+        }
+        updateRotation_(timeElapsedS) {
+          const xh = mousex / window.innerWidth;
+          const yh = mousey / window.innerHeight;
+
+          this.phi_ += -xh * this.phiSpeed_;
+          this.theta_ = clamp(
+            this.theta_ + -yh * this.thetaSpeed_,
+            -Math.PI / 3,
+            Math.PI / 3
+          );
+
+          const qx = new THREE.Quaternion();
+          qx.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.phi_);
+          const qz = new THREE.Quaternion();
+          qz.setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.theta_);
+
+          const q = new THREE.Quaternion();
+          q.multiply(qx);
+          //q.multiply(qz);
+          //this.qq.copy(new THREE.Quaternion(this.qq.x+q.x,this.qq.y+q.y,this.qq.z+q.z,this.qq.w+q.w) )
+          this.qq.copy(q)
+        }
+
+        Update(timeInSeconds) {
+          body.position=new CANNON.Vec3(0,100,0)
+          sphere.position.set(
+            body.position.x,
+            body.position.y,
+            body.position.z
+          );
+          sphere.quaternion.set(
+            body.quaternion.x,
+            body.quaternion.y,
+            body.quaternion.z,
+            body.quaternion.w
+          );
+
+          this._target = sphere;
+          console.log(sphere);
+          console.log(body);
+          this.updateRotation_(timeInSeconds);
+          mousex = 0;
+          mousey = 0;
+
+          if (!this._target) {
+            return;
+          }
+         
+          const velocity = this._velocity;
+          const frameDecceleration = new THREE.Vector3(
+            velocity.x * this._decceleration.x,
+            velocity.y * this._decceleration.y,
+            velocity.z * this._decceleration.z
+          );
+          console.log(velocity,frameDecceleration)
+          frameDecceleration.multiplyScalar(timeInSeconds);
+          frameDecceleration.z =
+            Math.sign(frameDecceleration.z) *
+            Math.min(Math.abs(frameDecceleration.z), Math.abs(velocity.z));
+          console.log(velocity,frameDecceleration)
+          velocity.add(frameDecceleration);
+          console.log(velocity)
+
+          const controlObject = this._target;
+          const _Q = new THREE.Quaternion();
+          const _A = new THREE.Vector3();
+
+          if (mouse) {
+            controlObject.quaternion.copy(this.qq);
+          }
+
+          const _R = controlObject.quaternion.clone();
+
+          const acc = this._acceleration.clone();
+          if (this._input._keys.shift) {
+            acc.multiplyScalar(2.0);
+          }
+
+          if (this._input._keys.forward) {
+            velocity.z += acc.z * timeInSeconds;
+          }
+          if (this._input._keys.backward) {
+            velocity.z -= acc.z * timeInSeconds;
+          }
+
+          if (this._input._keys.left) {
+            _A.set(0, 1, 0);
+            _Q.setFromAxisAngle(
+              _A,
+              4.0 * Math.PI * timeInSeconds * this._acceleration.y
+            );
+            _R.multiply(_Q);
+          }
+          if (this._input._keys.right) {
+            _A.set(0, 1, 0);
+            _Q.setFromAxisAngle(
+              _A,
+              4.0 * -Math.PI * timeInSeconds * this._acceleration.y
+            );
+            _R.multiply(_Q);
+          }
+          controlObject.quaternion.copy(_R);
+
+          const oldPosition = new THREE.Vector3();
+          oldPosition.copy(controlObject.position);
+
+          const forward = new THREE.Vector3(0, 0, 1);
+          forward.normalize();
+          forward.applyQuaternion(controlObject.quaternion);
+
+          if (mouse) {
+            forward.applyQuaternion(this.qq);
+          }
+          console.log(velocity)
+          console.log(oldPosition)
+          console.log(forward)
+
+          const sideways = new THREE.Vector3(1, 0, 0);
+          sideways.applyQuaternion(controlObject.quaternion);
+
+          sideways.normalize();
+
+          sideways.multiplyScalar(velocity.x * timeInSeconds);
+          forward.multiplyScalar(velocity.z * timeInSeconds);
+
+          controlObject.position.add(forward);
+          controlObject.position.add(sideways);
+
+          oldPosition.copy(controlObject.position);
+          let bp = body.position;
+          let co = controlObject.position;
+          let change = new CANNON.Vec3(
+            bp.x - co.x,
+            bp.y - co.y,
+            bp.z - co.z
+          ).scale(1 / timeInSeconds);
+          body.velocity.set(
+            change.x + body.velocity.x,
+            change.y + body.velocity.y,
+            change.y + body.velocity.y
+          );
+        }
+      }
+
+      class BasicCharacterControllerInput {
+        constructor() {
+          this._Init();
+        }
+
+        _Init() {
+          this._keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false,
+            space: false,
+            shift: false,
+          };
+          document.addEventListener(
+            "keydown",
+            (e) => this._onKeyDown(e),
+            false
+          );
+          document.addEventListener("keyup", (e) => this._onKeyUp(e), false);
+          document.addEventListener("mousemove", (e) => this._mouse(e), false);
+        }
+
+        _onKeyDown(event) {
+          switch (event.keyCode) {
+            case 87: // w
+              this._keys.forward = true;
+              break;
+            case 65: // a
+              this._keys.left = true;
+              break;
+            case 83: // s
+              this._keys.backward = true;
+              break;
+            case 68: // d
+              this._keys.right = true;
+              break;
+            case 32: // SPACE
+              this._keys.space = true;
+              break;
+            case 16: // SHIFT
+              this._keys.shift = true;
+              break;
+          }
+        }
+
+        _onKeyUp(event) {
+          switch (event.keyCode) {
+            case 87: // w
+              this._keys.forward = false;
+              break;
+            case 65: // a
+              this._keys.left = false;
+              break;
+            case 83: // s
+              this._keys.backward = false;
+              break;
+            case 68: // d
+              this._keys.right = false;
+              break;
+            case 32: // SPACE
+              this._keys.space = false;
+              break;
+            case 16: // SHIFT
+              this._keys.shift = false;
+              break;
+            case 84:
+              mouse = !mouse;
+          }
+        }
+
+        _mouse(event) {
+          mousex = event.movementX;
+          mousey = event.movementY;
+        }
+      }
+
+      function step(t) {
+        let te = t * 0.001;
+
+        if (controls) {
+          controls.Update(te);
+        }
+
+        thirdPersonCamera.Update(te);
+      }
+      function _step() {
+        requestAnimationFrame((t) => {
+          if (prev === null) {
+            prev = t;
+          }
+
+          _step();
+          step(t - prev);
+          prev = t;
+        });
+      }
+
+      function threeps() {
+        const params = {
+          camera: demo.camera,
+          scene: demo.scene,
+        };
+        controls = new BasicCharacterController(params);
+
+        thirdPersonCamera = new ThirdPersonCamera({
+          camera: demo.camera,
+          target: body,
+        });
+        _step();
+      }
+
+      function Vector3_Vec3(t) {
+        let res = new THREE.Vector3(t.x, t.y, t.z);
+        console.log(res);
+        return res;
+      }
+      function Vec3_Vector3(t) {
+        console.log(t);
+        let re = new CANNON.Vec3(t.x, t.y, t.z);
+
+        return re;
       }
 
       // Build the car chassis
@@ -43,7 +385,11 @@
       let controls;
       let thirdPersonCamera;
       let mousey;
-      
+      const geometry = new THREE.SphereGeometry(radius, 32, 16);
+      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const sphere = new THREE.Mesh(geometry, material);
+
+
       let prev;
       const shape = new CANNON.Sphere(radius);
       const body = new CANNON.Body({ mass, material: wheelMaterial });
@@ -52,7 +398,7 @@
       demo.addScene("Car", () => {
         const world = setupWorld(demo);
 
-        body.position.y = 100;
+        body.position = new CANNON.Vec3(0, 100, 0);
         body.addShape(shape);
         body.linearDamping = damping;
         body.angularDamping = damping;
@@ -106,7 +452,8 @@
           }
         );
         world.addContactMaterial(wheel_ground);
-
+        console.log(body.position);
+        threeps();
         // Keybindings
         // Add force on keydown
         /*document.addEventListener("keydown", (event) => {
@@ -145,272 +492,6 @@
       });
 
       demo.start();
-
-      function setupWorld(demo) {
-        const world = demo.getWorld();
-        world.gravity.set(0, -30, 0);
-
-        // Sweep and prune broadphase
-        world.broadphase = new CANNON.SAPBroadphase(world);
-
-        // Adjust the global friction
-        world.defaultContactMaterial.friction = 0.2;
-
-        return world;
-      }
-
-      class BasicCharacterController {
-        constructor(params) {
-          this._Init(params);
-        }
-
-        _Init(params) {
-          this._params = params;
-          this._decceleration = new THREE.Vector3(-0.0005, -0.0001, -5.0);
-          this._acceleration = new THREE.Vector3(1, 0.25, 50.0);
-          this._velocity = new THREE.Vector3(0, 0, 0);
-          this._position = new THREE.Vector3();
-        
-          this._input = new BasicCharacterControllerInput();
-          let material=new THREE.MeshBasicMaterial({ color: 0x00ff00})
-          this._target=body
-          console.log(this._target)
-
-        }
-        get Position() {
-          return this._position;
-        }
-
-        get Rotation() {
-          if (!this._target) {
-            return new THREE.Quaternion();
-          }
-          return this._target.quaternion;
-        }
-
-        Update(timeInSeconds) {
-          const velocity = this._velocity.clone();
-          
-          const frameDecceleration = new THREE.Vector3(
-            velocity.x * this._decceleration.x,
-            velocity.y * this._decceleration.y,
-            velocity.z * this._decceleration.z
-          );
-          
-          frameDecceleration.multiplyScalar(timeInSeconds);
-          frameDecceleration.z =
-            Math.sign(frameDecceleration.z) *
-            Math.min(Math.abs(frameDecceleration.z), Math.abs(velocity.z));
-
-          velocity.add(frameDecceleration);
-
-          const controlObject = body;
-          const _Q = new THREE.Quaternion();
-          const _A = new THREE.Vector3();
-          const _R = controlObject.quaternion.clone();
-          
-          const acc = this._acceleration.clone();
-          if (this._input._keys.shift) {
-            acc.multiplyScalar(2.0);
-          }
-
-          if (this._input._keys.forward) {
-            velocity.z += acc.z * timeInSeconds;
-          }
-          if (this._input._keys.backward) {
-            velocity.z -= acc.z * timeInSeconds;
-          }
-          if (this._input._keys.left) {
-            _A.set(0, 1, 0);
-            _Q.setFromAxisAngle(
-              _A,
-              4.0 * Math.PI * timeInSeconds * this._acceleration.y
-            );
-            _R.multiply(_Q);
-          }
-          if (this._input._keys.right) {
-            _A.set(0, 1, 0);
-            _Q.setFromAxisAngle(
-              _A,
-              4.0 * -Math.PI * timeInSeconds * this._acceleration.y
-            );
-            _R.multiply(_Q);
-          }
-
-          controlObject.quaternion.copy(_R);
-
-          const oldPosition = new THREE.Vector3();
-          oldPosition.copy(Vector3_Vec3(controlObject.position));
-
-          const forward = new THREE.Vector3(0, 0, 1);
-          forward.applyQuaternion(new THREE.Quaternion(controlObject.quaternion.x,controlObject.quaternion.y,controlObject.quaternion.z,controlObject.quaternion.w));
-          forward.normalize();
-
-          const sideways = new THREE.Vector3(1, 0, 0);
-          
-          sideways.applyQuaternion(new THREE.Quaternion(controlObject.quaternion.x,controlObject.quaternion.y,controlObject.quaternion.z,controlObject.quaternion.w));
-          sideways.normalize();
-
-
-          sideways.multiplyScalar(velocity.x * timeInSeconds);
-          forward.multiplyScalar(velocity.z * timeInSeconds);
-          
-
-
-          controlObject.position=Vec3_Vector3( Vector3_Vec3( controlObject.position).add(forward));
-          console.log(controlObject.position)
-          controlObject.position=Vec3_Vector3( Vector3_Vec3(  controlObject.position).add(sideways))
-
-          this._position.copy(Vector3_Vec3(controlObject.position));
-
-        }
-      }
-
-      class BasicCharacterControllerInput {
-        constructor() {
-          this._Init();
-        }
-
-        _Init() {
-          this._keys = {
-            forward: false,
-            backward: false,
-            left: false,
-            right: false,
-            space: false,
-            shift: false,
-          };
-          document.addEventListener(
-            "keydown",
-            (e) => this._onKeyDown(e),
-            false
-          );
-          document.addEventListener("keyup", (e) => this._onKeyUp(e), false);
-        }
-
-        _onKeyDown(event) {
-          switch (event.keyCode) {
-            case 87: // w
-              this._keys.forward = true;
-              break;
-            case 65: // a
-              this._keys.left = true;
-              break;
-            case 83: // s
-              this._keys.backward = true;
-              break;
-            case 68: // d
-              this._keys.right = true;
-              break;
-            case 32: // SPACE
-              this._keys.space = true;
-              break;
-            case 16: // SHIFT
-              this._keys.shift = true;
-              break;
-          }
-        }
-
-        _onKeyUp(event) {
-          switch (event.keyCode) {
-            case 87: // w
-              this._keys.forward = false;
-              break;
-            case 65: // a
-              this._keys.left = false;
-              break;
-            case 83: // s
-              this._keys.backward = false;
-              break;
-            case 68: // d
-              this._keys.right = false;
-              break;
-            case 32: // SPACE
-              this._keys.space = false;
-              break;
-            case 16: // SHIFT
-              this._keys.shift = false;
-              break;
-          }
-        }
-      }
-
-      class ThirdPersonCamera {
-        constructor(params) {
-          this._params = params;
-          this._camera = params.camera;
-
-          this._currentPosition = new THREE.Vector3();
-          this._currentLookat = new THREE.Vector3();
-        }
-
-        _CalculateIdealOffset() {
-          const idealOffset = new THREE.Vector3(-15, 20, -30);
-          idealOffset.applyQuaternion(this._params.target.Rotation);
-          idealOffset.add(this._params.target.Position);
-          return idealOffset;
-        }
-
-        _CalculateIdealLookat() { 
-          const idealLookat = new THREE.Vector3(0, 10, 50);
-          idealLookat.applyQuaternion(this._params.target.Rotation);
-          idealLookat.add(this._params.target.Position);
-          return idealLookat;
-        }
-
-        Update(timeElapsed) {
-          const idealOffset = this._CalculateIdealOffset();
-          const idealLookat = this._CalculateIdealLookat();
-
-          // const t = 0.05;
-          // const t = 4.0 * timeElapsed;
-          const t = 1.0 - Math.pow(0.001, timeElapsed);
-
-          this._currentPosition.lerp(idealOffset, t);
-          this._currentLookat.lerp(idealLookat, t);
-
-          this._camera.position.copy(this._currentPosition);
-          this._camera.lookAt(this._currentLookat);
-          
-          
-        }
-      }
-      function step(t) {
-        let te = t * 0.001;
-   
-
-        if (controls) {
-          controls.Update(te);
-        }
-
-        thirdPersonCamera.Update(te);
-      }
-      function _step() {
-        requestAnimationFrame((t) => {
-          if (prev === null) {
-            prev = t;
-          }
-
-          _step();
-          step(t - prev);
-          prev = t;
-        });
-      }
-
-      function threeps() {
-        const params = {
-          camera: demo.camera,
-          scene: demo.scene,
-        };
-        controls = new BasicCharacterController(params);
-
-        thirdPersonCamera = new ThirdPersonCamera({
-          camera: demo.camera,
-          target: controls,
-        });
-        _step();
-      }
-      threeps();
     </script>
   </body>
 </html>
