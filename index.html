@@ -18,7 +18,35 @@
       import { bodyToMesh } from "./js/three-conversion-utils.js";
 
       const demo = new Demo();
-     
+      let camera;
+      const wheelShape = new CANNON.Sphere(1.5);
+      const wheelMaterial = new CANNON.Material("wheel");
+      const radius = 10;
+      let noise = new OpenSimplexNoise(7);
+      const mass = 2;
+      const strength = 500;
+      const dt = 1 / 60;
+      const damping = 0.5;
+      let mousex = 0;
+      let mousey = 0;
+      const fov = 60;
+      const aspect = 1920 / 1080;
+      const near = 1.0;
+      const far = 1000.0;
+      camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+      camera.position.set(25, 10, 25);
+      let controls;
+      let thirdPersonCamera;
+
+      let geometry = new THREE.SphereGeometry(radius, 32, 16);
+      let material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      let sphere = new THREE.Mesh(geometry, material);
+      
+  
+      let prev;
+      const shape = new CANNON.Sphere(radius);
+      const body = new CANNON.Body({ mass, material: wheelMaterial });
+
       function setupWorld(demo) {
         const world = demo.getWorld();
         world.gravity.set(0, -30, 0);
@@ -32,11 +60,10 @@
         return world;
       }
 
-      let mouse = true;
+
       function clamp(x, a, b) {
         return Math.min(Math.max(x, a), b);
       }
-
       class ThirdPersonCamera {
         constructor(params) {
           this._params = params;
@@ -45,27 +72,18 @@
           this._currentPosition = new THREE.Vector3();
           this._currentLookat = new THREE.Vector3();
         }
+
         _CalculateIdealOffset() {
-          const idealOffset = new THREE.Vector3(0, 40, -60);
-          let bp = body.position;
-          let bq = body.quaternion;
-          idealOffset.applyQuaternion(
-            new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w)
-          );
-
-          idealOffset.add(Vector3_Vec3(body.position));
-
+          const idealOffset = new THREE.Vector3(-15, 20, -30);
+          idealOffset.applyQuaternion(this._params.target._target.rotation);
+          idealOffset.add(this._params.target._target.position);
           return idealOffset;
         }
 
         _CalculateIdealLookat() {
           const idealLookat = new THREE.Vector3(0, 10, 50);
-          let bp = body.position;
-          let bq = body.quaternion;
-          idealLookat.applyQuaternion(
-            new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w)
-          );
-          idealLookat.add(Vector3_Vec3(body.position));
+          idealLookat.applyQuaternion(this._params.target._target.rotation);
+          idealLookat.add(this._params.target._target.position);
           return idealLookat;
         }
 
@@ -76,15 +94,13 @@
           // const t = 0.05;
           // const t = 4.0 * timeElapsed;
           const t = 1.0 - Math.pow(0.001, timeElapsed);
-
           this._currentPosition.lerp(idealOffset, t);
           this._currentLookat.lerp(idealLookat, t);
-
+          console.log(timeElapsed)
           this._camera.position.copy(this._currentPosition);
           this._camera.lookAt(this._currentLookat);
         }
       }
-
       class BasicCharacterController {
         constructor(params) {
           this._Init(params);
@@ -96,13 +112,17 @@
           this.phiSpeed_ = 8;
           this.theta_ = 0;
           this.thetaSpeed_ = 5;
-          this._decceleration = new THREE.Vector3(-0.0005, -0.0001, -5.0);
-          this._acceleration = new THREE.Vector3(1, 0.25, 50.0);
+          this._decceleration = new THREE.Vector3(-5.0, -0.0001, -5.0);
+          this._acceleration = new THREE.Vector3(50.0, 0.25, 50.0);
           this._velocity = new THREE.Vector3(0, 0, 0);
-          this.qq = new THREE.Quaternion();
+
           this._animations = {};
           this._input = new BasicCharacterControllerInput();
           //this._LoadModels();
+
+          this._target = sphere;
+
+          this._params.scene.add(sphere);
         }
         updateRotation_(timeElapsedS) {
           const xh = mousex / window.innerWidth;
@@ -124,11 +144,12 @@
           q.multiply(qx);
           //q.multiply(qz);
           //this.qq.copy(new THREE.Quaternion(this.qq.x+q.x,this.qq.y+q.y,this.qq.z+q.z,this.qq.w+q.w) )
-          this.qq.copy(q)
+          this.qq.copy(q);
+          //console.log(body)
+          //body.rotation.x=this.phi_
         }
 
         Update(timeInSeconds) {
-          body.position=new CANNON.Vec3(0,100,0)
           sphere.position.set(
             body.position.x,
             body.position.y,
@@ -140,40 +161,35 @@
             body.quaternion.z,
             body.quaternion.w
           );
-
-          this._target = sphere;
-          console.log(sphere);
-          console.log(body);
-          this.updateRotation_(timeInSeconds);
+          //this.updateRotation_(timeInSeconds);
           mousex = 0;
           mousey = 0;
 
           if (!this._target) {
             return;
           }
-         
-          const velocity = this._velocity;
+
+          const velocity = this._velocity.clone();
+
           const frameDecceleration = new THREE.Vector3(
             velocity.x * this._decceleration.x,
             velocity.y * this._decceleration.y,
             velocity.z * this._decceleration.z
           );
-          console.log(velocity,frameDecceleration)
+
           frameDecceleration.multiplyScalar(timeInSeconds);
+
           frameDecceleration.z =
             Math.sign(frameDecceleration.z) *
             Math.min(Math.abs(frameDecceleration.z), Math.abs(velocity.z));
-          console.log(velocity,frameDecceleration)
+
           velocity.add(frameDecceleration);
-          console.log(velocity)
 
           const controlObject = this._target;
           const _Q = new THREE.Quaternion();
           const _A = new THREE.Vector3();
 
-          if (mouse) {
-            controlObject.quaternion.copy(this.qq);
-          }
+          //controlObject.quaternion.copy(this.qq);
 
           const _R = controlObject.quaternion.clone();
 
@@ -190,42 +206,30 @@
           }
 
           if (this._input._keys.left) {
-            _A.set(0, 1, 0);
-            _Q.setFromAxisAngle(
-              _A,
-              4.0 * Math.PI * timeInSeconds * this._acceleration.y
-            );
-            _R.multiply(_Q);
+            velocity.x += acc.x * timeInSeconds;
           }
           if (this._input._keys.right) {
-            _A.set(0, 1, 0);
-            _Q.setFromAxisAngle(
-              _A,
-              4.0 * -Math.PI * timeInSeconds * this._acceleration.y
-            );
-            _R.multiply(_Q);
+            velocity.x -= acc.x * timeInSeconds;
           }
+
           controlObject.quaternion.copy(_R);
 
           const oldPosition = new THREE.Vector3();
           oldPosition.copy(controlObject.position);
 
           const forward = new THREE.Vector3(0, 0, 1);
-          forward.normalize();
-          forward.applyQuaternion(controlObject.quaternion);
 
-          if (mouse) {
-            forward.applyQuaternion(this.qq);
-          }
-          console.log(velocity)
-          console.log(oldPosition)
-          console.log(forward)
+          // forward.applyQuaternion(this.qq);
 
           const sideways = new THREE.Vector3(1, 0, 0);
-          sideways.applyQuaternion(controlObject.quaternion);
 
-          sideways.normalize();
-
+          let f = forward;
+          let s = sideways;
+          f.multiplyScalar(velocity.z);
+          s.multiplyScalar(velocity.x);
+          let fs = new CANNON.Vec3(f.x + s.x, f.y + s.y, f.z + s.z);
+          body.velocity.x += fs.x;
+          body.velocity.z += fs.z;
           sideways.multiplyScalar(velocity.x * timeInSeconds);
           forward.multiplyScalar(velocity.z * timeInSeconds);
 
@@ -233,18 +237,9 @@
           controlObject.position.add(sideways);
 
           oldPosition.copy(controlObject.position);
-          let bp = body.position;
-          let co = controlObject.position;
-          let change = new CANNON.Vec3(
-            bp.x - co.x,
-            bp.y - co.y,
-            bp.z - co.z
-          ).scale(1 / timeInSeconds);
-          body.velocity.set(
-            change.x + body.velocity.x,
-            change.y + body.velocity.y,
-            change.y + body.velocity.y
-          );
+
+          //body.quaternion=new CANNON.Quaternion(controlObject.quaternion.x,controlObject.quaternion.y,controlObject.quaternion.z,controlObject.quaternion.w)
+          //thirdPersonCamera.Update(timeInSeconds);
         }
       }
 
@@ -314,8 +309,6 @@
             case 16: // SHIFT
               this._keys.shift = false;
               break;
-            case 84:
-              mouse = !mouse;
           }
         }
 
@@ -328,11 +321,14 @@
       function step(t) {
         let te = t * 0.001;
 
-        if (controls) {
-          controls.Update(te);
+        if (isNaN(te)) {
+        } else {
+          if (controls) {
+            controls.Update(te);
+          }
+          thirdPersonCamera.Update(te);
+          demo.camera = camera;
         }
-
-        thirdPersonCamera.Update(te);
       }
       function _step() {
         requestAnimationFrame((t) => {
@@ -348,51 +344,32 @@
 
       function threeps() {
         const params = {
-          camera: demo.camera,
+          camera: camera,
           scene: demo.scene,
         };
         controls = new BasicCharacterController(params);
-
         thirdPersonCamera = new ThirdPersonCamera({
-          camera: demo.camera,
-          target: body,
+          camera: camera,
+          target: controls,
         });
+        
+
         _step();
       }
 
       function Vector3_Vec3(t) {
         let res = new THREE.Vector3(t.x, t.y, t.z);
-        console.log(res);
+
         return res;
       }
       function Vec3_Vector3(t) {
-        console.log(t);
         let re = new CANNON.Vec3(t.x, t.y, t.z);
 
         return re;
       }
 
       // Build the car chassis
-      const wheelShape = new CANNON.Sphere(1.5);
-      const wheelMaterial = new CANNON.Material("wheel");
-      const radius = 10;
-      let noise = new OpenSimplexNoise(7);
-      const mass = 2;
-      const strength = 500;
-      const dt = 1 / 60;
-      const damping = 0.5;
-      let mousex;
-      let controls;
-      let thirdPersonCamera;
-      let mousey;
-      const geometry = new THREE.SphereGeometry(radius, 32, 16);
-      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-      const sphere = new THREE.Mesh(geometry, material);
-
-
-      let prev;
-      const shape = new CANNON.Sphere(radius);
-      const body = new CANNON.Body({ mass, material: wheelMaterial });
+      
 
       // Add impulse to the body center
       demo.addScene("Car", () => {
@@ -418,7 +395,7 @@
               continue;
             }
 
-            const height = Math.abs(noise.noise2D(i * ma, j * ma) * 56);
+            const height = Math.abs(noise.noise2D(i * ma, j * ma) * 1);
             matrix[i].push(height);
           }
         }
@@ -451,9 +428,9 @@
             contactEquationStiffness: 1000,
           }
         );
+
         world.addContactMaterial(wheel_ground);
-        console.log(body.position);
-        threeps();
+
         // Keybindings
         // Add force on keydown
         /*document.addEventListener("keydown", (event) => {
@@ -492,6 +469,7 @@
       });
 
       demo.start();
+      threeps();
     </script>
   </body>
 </html>
